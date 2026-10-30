@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VSaber Node · Motion Sender</title>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #0f172a;
+    color: #f8fafc;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    text-align: center;
+  }
+  .card {
+    background: #1e293b;
+    border: 2px solid #334155;
+    border-radius: 16px;
+    padding: 24px;
+    width: 90%;
+    max-width: 400px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+  }
+  h2 { margin-top: 0; color: #38bdf8; }
+  button {
+    background: #0ea5e9;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    font-size: 1rem;
+    font-weight: bold;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-top: 15px;
+    width: 100%;
+    transition: background 0.2s;
+  }
+  button:active { background: #0284c7; }
+  .status { margin-top: 15px; font-size: 0.85rem; color: #94a3b8; }
+  .metric { font-family: monospace; font-size: 1.2rem; color: #34d399; margin: 10px 0; }
+</style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>⚔️ VSaber Node</h2>
+    <p class="status">MQTT Broker: <span id="connStatus" style="color: #facc15;">Menghubungkan...</span></p>
+    
+    <div style="margin: 15px 0;">
+      <label>Pilih Posisi Pedang:</label><br>
+      <select id="roleSelect" style="margin-top: 5px; padding: 8px; border-radius: 6px; background: #0f172a; color: white; border: 1px solid #475569;">
+        <option value="vlightsaber/pedang/kiri">Pedang Kiri (Player 1)</option>
+        <option value="vlightsaber/pedang/kanan">Pedang Kanan (Player 2)</option>
+      </select>
+    </div>
+
+    <div class="metric">Swing Speed: <span id="speedVal">0.0</span> m/s²</div>
+    
+    <button id="startBtn">Aktifkan Sensor & Mulai Battle</button>
+  </div>
+
+<script>
+  const connStatus = document.getElementById('connStatus');
+  const speedVal = document.getElementById('speedVal');
+  const startBtn = document.getElementById('startBtn');
+  const roleSelect = document.getElementById('roleSelect');
+
+  let mqttClient = null;
+  let isConnected = false;
+
+  function initMQTT() {
+    const clientId = 'vsaber_node_' + Math.random().toString(16).slice(2, 8);
+    mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', { clientId: clientId });
+
+    mqttClient.on('connect', () => {
+      connStatus.textContent = 'Terhubung!';
+      connStatus.style.color = '#34d399';
+      isConnected = true;
+    });
+
+    mqttClient.on('error', (err) => {
+      connStatus.textContent = 'Gagal: ' + err.message;
+      connStatus.style.color = '#f87171';
+    });
+  }
+
+  initMQTT();
+
+  function handleMotion(event) {
+    if (!isConnected) return;
+
+    let acc = event.acceleration || event.accelerationIncludingGravity;
+    let x = acc.x || 0;
+    let y = acc.y || 0;
+    let z = acc.z || 0;
+
+    let swingSpeed = Math.hypot(x, y, z);
+    speedVal.textContent = swingSpeed.toFixed(2);
+
+    let isLeft = roleSelect.value.includes('kiri');
+
+    let payload = JSON.stringify({
+      device_id: isLeft ? 'sword1' : 'sword2',
+      timestamp: Date.now(),
+      motion: {
+        x: x,
+        y: y,
+        z: z,
+        swing_speed: swingSpeed,
+        is_swinging: swingSpeed > 12.0
+      }
+    });
+
+    mqttClient.publish(roleSelect.value, payload, { qos: 0 });
+  }
+
+  startBtn.addEventListener('click', async () => {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      try {
+        const response = await DeviceMotionEvent.requestPermission();
+        if (response === 'granted') {
+          window.addEventListener('devicemotion', handleMotion);
+          alert('Sensor berhasil diaktifkan!');
+        } else {
+          alert('Izin sensor ditolak.');
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      window.addEventListener('devicemotion', handleMotion);
+      alert('Sensor aktif! Silakan ayunkan HP-mu.');
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VSaber Arena · Web Sensor Battle</title>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  body { 
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+    background: #0b0f12; 
+    color: #e8edf1; 
+    margin: 0; 
+    padding: 20px; 
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  h1 { font-size: 1.8rem; color: #00ffcc; text-shadow: 0 0 10px rgba(0,255,204,0.5); margin-bottom: 5px; }
+  .status { font-size: 0.9rem; margin-bottom: 15px; color: #8a98a5; }
+  #connStatus { color: #ffcc00; font-weight: bold; }
+  
+  .arena-container {
+    position: relative;
+    width: 800px;
+    height: 450px;
+    background: #131920;
+    border: 2px solid #2a343e;
+    border-radius: 12px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.8);
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .scoreboard {
+    display: flex;
+    justify-content: space-around;
+    width: 800px;
+    margin-top: 15px;
+  }
+  .card {
+    background: #192027;
+    border: 1px solid #2a343e;
+    padding: 12px 20px;
+    border-radius: 8px;
+    width: 45%;
+    text-align: center;
+  }
+  .card.sword1 { border-color: #3b82f6; }
+  .card.sword2 { border-color: #ef4444; }
+</style>
+</head>
+<body>
+
+  <h1>⚔️ VSABER: Web-Based Motion Arena</h1>
+  <div class="status">Status Koneksi MQTT: <span id="connStatus">Menghubungkan...</span></div>
+
+  <div class="arena-container">
+    <canvas id="battleCanvas" width="800" height="450"></canvas>
+  </div>
+
+  <div class="scoreboard">
+    <div class="card sword1">
+      <h3 style="color: #3b82f6; margin: 0 0 5px 0;">Player 1 (Pedang Kiri)</h3>
+      <p id="s1-status" style="margin: 0; font-family: monospace;">Aksi: Menunggu...</p>
+    </div>
+    <div class="card sword2">
+      <h3 style="color: #ef4444; margin: 0 0 5px 0;">Player 2 (Pedang Kanan)</h3>
+      <p id="s2-status" style="margin: 0; font-family: monospace;">Aksi: Menunggu...</p>
+    </div>
+  </div>
+
+<script>
+  const connStatus = document.getElementById('connStatus');
+  const s1Status = document.getElementById('s1-status');
+  const s2Status = document.getElementById('s2-status');
+  const canvas = document.getElementById('battleCanvas');
+  const ctx = canvas.getContext('2d');
+
+  let p1 = { x: 200, y: 225, color: '#3b82f6', trail: [], active: false };
+  let p2 = { x: 600, y: 225, color: '#ef4444', trail: [], active: false };
+
+  // Setup Web Audio API untuk Efek Suara Real-Time (Tanpa file eksternal)
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  function playWhoosh() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    let osc = audioCtx.createOscillator();
+    let gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(80, audioCtx.currentTime + 0.2);
+    
+    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.2);
+  }
+
+  function playClash() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    let osc = audioCtx.createOscillator();
+    let gain = audioCtx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+    osc.frequency.setValueAtTime(200, audioCtx.currentTime + 0.1);
+    
+    gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.3);
+  }
+
+  // MQTT Connection ke Broker Publik via WebSocket
+  const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+    clientId: 'vsaber_dashboard_' + Math.random().toString(16).slice(2, 8)
+  });
+
+  client.on('connect', () => {
+    connStatus.textContent = 'Terhubung!';
+    connStatus.style.color = '#00ffcc';
+    // Subscribe menggunakan wildcard agar mencakup pedang kiri & kanan
+    client.subscribe('vlightsaber/pedang/#', { qos: 0 });
+  });
+
+  client.on('error', err => {
+    connStatus.textContent = 'Gagal Koneksi: ' + err.message;
+    connStatus.style.color = '#ef4444';
+  });
+
+  client.on('message', (topic, payloadBuf) => {
+    try {
+      const data = JSON.parse(payloadBuf.toString());
+      
+      if (data.device_id === 'sword1') {
+        p1.x = 200 + ((data.motion.x || 0) * 15);
+        p1.y = 225 - ((data.motion.y || 0) * 15);
+        s1Status.textContent = `Swing: ${data.motion.swing_speed.toFixed(1)} m/s²`;
+        
+        if (data.motion.is_swinging) {
+          playWhoosh();
+          p1.trail.push({x: p1.x, y: p1.y, alpha: 1.0});
+        }
+      } else if (data.device_id === 'sword2') {
+        p2.x = 600 + ((data.motion.x || 0) * 15);
+        p2.y = 225 - ((data.motion.y || 0) * 15);
+        s2Status.textContent = `Swing: ${data.motion.swing_speed.toFixed(1)} m/s²`;
+        
+        if (data.motion.is_swinging) {
+          playWhoosh();
+          p2.trail.push({x: p2.x, y: p2.y, alpha: 1.0});
+        }
+      }
+
+      // Deteksi Clash (Benturan Antar Pedang)
+      let dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+      if (dist < 60) {
+        playClash();
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc((p1.x + p2.x)/2, (p1.y + p2.y)/2, 50, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+    } catch(e) {
+      console.error('Parsing error:', e);
+    }
+  });
+
+  // Render Loop Canvas untuk Efek Slash Trail yang Mulus
+  function draw() {
+    ctx.fillStyle = 'rgba(19, 25, 32, 0.3)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    p1.trail.forEach((t) => {
+      ctx.fillStyle = `rgba(59, 130, 246, ${t.alpha})`;
+      ctx.beginPath(); ctx.arc(t.x, t.y, 8, 0, Math.PI * 2); ctx.fill();
+      t.alpha -= 0.05;
+    });
+    p1.trail = p1.trail.filter(t => t.alpha > 0);
+
+    p2.trail.forEach((t) => {
+      ctx.fillStyle = `rgba(239, 68, 68, ${t.alpha})`;
+      ctx.beginPath(); ctx.arc(t.x, t.y, 8, 0, Math.PI * 2); ctx.fill();
+      t.alpha -= 0.05;
+    });
+    p2.trail = p2.trail.filter(t => t.alpha > 0);
+
+    ctx.fillStyle = '#3b82f6';
+    ctx.beginPath(); ctx.arc(p1.x, p1.y, 14, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath(); ctx.arc(p2.x, p2.y, 14, 0, Math.PI * 2); ctx.fill();
+
+    requestAnimationFrame(draw);
+  }
+
+  draw();
+</script>
+</body>
+</html>
